@@ -1,0 +1,48 @@
+# Deploys the idempotent Snowflake SQL (setup 01-03 + silver views).
+# Manual trigger only: Actions tab -> "Deploy Snowflake objects" -> Run workflow.
+# 04_deployment.sql is NOT included (run once by hand - no IF NOT EXISTS).
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PASSWORD, SF_MY_DOMAIN
+# For real use prefer a service user with key-pair auth instead of a password.
+name: Deploy Snowflake objects
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_views:
+        description: "Also deploy silver views (bronze tables must exist)"
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Snowflake CLI
+        run: pip install snowflake-cli
+      - name: Render placeholders
+        env:
+          SF_MY_DOMAIN: ${{ secrets.SF_MY_DOMAIN }}
+        run: bash scripts/render_sql.sh
+      - name: Run SQL
+        env:
+          SNOWFLAKE_ACCOUNT:  ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER:     ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: |
+          files="build/snowflake_01_setup_01_roles_warehouse.sql
+                 build/snowflake_01_setup_02_schemas.sql
+                 build/snowflake_01_setup_03_network_integration.sql"
+          if [ "${{ inputs.include_views }}" = "true" ]; then
+            files="$files build/snowflake_02_views_silver_views.sql"
+          fi
+          for f in $files; do
+            echo "=== $f ==="
+            snow sql -f "$f" --temporary-connection \
+              --account "$SNOWFLAKE_ACCOUNT" --user "$SNOWFLAKE_USER" \
+              --password "$SNOWFLAKE_PASSWORD" --role ACCOUNTADMIN
+          done
